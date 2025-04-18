@@ -29,39 +29,52 @@ func (s *Service) ParseJsonToBenthosConfig(pipeline configs.PipelineDefinition) 
 	return cfgs, nil
 }
 
-// generateBenthosConfig creates a minimal Benthos YAML config for a node based on its type,
-// config, and connections in the pipeline.
+// generateBenthosConfig builds a Benthos YAML config for a single node.
+// Allows custom input (node.Input) and custom output (node.Output).
 func generateBenthosConfig(node configs.Node, pipeline configs.PipelineDefinition) ([]byte, error) {
-	// Gather incoming and outgoing topics
-	var inputs, outputs []string
+	// Determine upstream topics
+	var inputs []string
 	for _, edge := range pipeline.Edges {
 		if edge.To == node.ID {
 			inputs = append(inputs, fmt.Sprintf("pipeline.%s.%s", pipeline.Name, edge.From))
 		}
+	}
+	// Determine downstream topics
+	var outputs []string
+	for _, edge := range pipeline.Edges {
 		if edge.From == node.ID {
 			outputs = append(outputs, fmt.Sprintf("pipeline.%s.%s", pipeline.Name, edge.To))
 		}
 	}
 
-	config := map[string]interface{}{
-		"input": map[string]interface{}{
-			"kafka": map[string]interface{}{
-				"addresses":      []string{"localhost:9092"},
-				"topics":         inputs,
-				"consumer_group": fmt.Sprintf("%s_%s_group", pipeline.Name, node.ID),
-			},
-		},
-		"pipeline": map[string]interface{}{
-			"processors": []interface{}{node.Config},
-		},
-		"output": map[string]interface{}{
-			"kafka": map[string]interface{}{
-				"addresses":      []string{"localhost:9092"},
-				"topics":         outputs,
-				"consumer_group": fmt.Sprintf("%s_%s_group", pipeline.Name, node.ID),
-			},
-		},
+	cfg := make(map[string]interface{})
+
+	// Input: custom plugin if provided, otherwise default Kafka
+	if node.Input != nil {
+		cfg["input"] = node.Input
+	} else {
+		cfg["input"] = map[string]interface{}{"kafka": map[string]interface{}{
+			"addresses":      []string{"localhost:9092"},
+			"topics":         inputs,
+			"consumer_group": fmt.Sprintf("%s_%s_group", pipeline.Name, node.ID),
+		}}
 	}
 
-	return yaml.Marshal(config)
+	// Processors: only for non-sink nodes
+	if node.Type != "sink" {
+		cfg["pipeline"] = map[string]interface{}{"processors": []interface{}{node.Config}}
+	}
+
+	// Output: custom plugin for sink, otherwise default Kafka
+	if node.Type == "sink" && node.Output != nil {
+		cfg["output"] = node.Output
+	} else {
+		cfg["output"] = map[string]interface{}{"kafka": map[string]interface{}{
+			"addresses":      []string{"localhost:9092"},
+			"topics":         outputs,
+			"consumer_group": fmt.Sprintf("%s_%s_group", pipeline.Name, node.ID),
+		}}
+	}
+
+	return yaml.Marshal(cfg)
 }

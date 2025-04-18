@@ -10,8 +10,10 @@ type PipelineDefinition struct {
 // Node represents a processing block in the pipeline.
 type Node struct {
 	ID     string                 `json:"id"`
-	Type   string                 `json:"type"`   // e.g., "transform", "filter", etc.
-	Config map[string]interface{} `json:"config"` // user-defined settings
+	Type   string                 `json:"type"`             // e.g., "transform", "filter", etc.
+	Input  map[string]interface{} `json:"input,omitempty"`  // optional source plugin (ESB, HTTP, etc.)
+	Output map[string]interface{} `json:"output,omitempty"` // optional sink plugin
+	Config map[string]interface{} `json:"config"`           // user-defined settings
 }
 
 // Edge connects two nodes in the pipeline.
