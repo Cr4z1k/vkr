@@ -7,5 +7,6 @@ type Service interface {
 }
 
 type Docker interface {
-	LaunchBenthosContainer(ctx context.Context, nodeId string, yamlBytes []byte) error
+	LaunchBenthosContainer(ctx context.Context, pipelineName, nodeID string, yamlBytes []byte) error
+	СleanupRemovedContainers(ctx context.Context, pipelines []PipelineDefinition) error
 }
