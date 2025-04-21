@@ -4,7 +4,7 @@ import (
 	"log"
 
 	"github.com/Cr4z1k/vkr/internal/docker_cli"
-	cfg_service "github.com/Cr4z1k/vkr/internal/service/parser"
+	cfgService "github.com/Cr4z1k/vkr/internal/service/parser"
 	"github.com/Cr4z1k/vkr/internal/transport/rest"
 	"github.com/Cr4z1k/vkr/internal/transport/rest/handlers"
 	"github.com/Cr4z1k/vkr/internal/transport/rest/handlers/configs"
@@ -23,7 +23,7 @@ func main() {
 	docker := docker_cli.New(dockerCli)
 
 	// init services
-	parserService := cfg_service.New()
+	parserService := cfgService.New()
 
 	// init handlers
 	cfgHandler := configs.New(parserService, docker)

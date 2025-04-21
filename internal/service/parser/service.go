@@ -2,7 +2,11 @@ package parser
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 
+	"github.com/Cr4z1k/vkr/internal/model"
 	"github.com/Cr4z1k/vkr/internal/transport/rest/handlers/configs"
 	"gopkg.in/yaml.v3"
 )
@@ -14,8 +18,8 @@ func New() *Service {
 	return &Service{}
 }
 
-func (s *Service) ParseJsonToBenthosConfig(pipeline configs.PipelineDefinition) (map[string][]byte, error) {
-	cfgs := make(map[string][]byte)
+func (s *Service) ParseJsonToBenthosConfig(pipeline configs.PipelineDefinition) (map[string]model.Paths, error) {
+	cfgPaths := make(map[string]model.Paths)
 
 	for _, node := range pipeline.Nodes {
 		yamlBytes, err := generateBenthosConfig(node, pipeline)
@@ -23,10 +27,27 @@ func (s *Service) ParseJsonToBenthosConfig(pipeline configs.PipelineDefinition) 
 			return nil, fmt.Errorf("error in generateBenthosConfig for nodeID - %s: %s", node.ID, err.Error())
 		}
 
-		cfgs[node.ID] = yamlBytes
+		configDir := filepath.Join(os.TempDir(), "ork_benthos_configs")
+		if err := os.MkdirAll(configDir, 0755); err != nil {
+			return nil, fmt.Errorf("cannot create config directory: %w", err)
+		}
+		configFile := fmt.Sprintf("%s_%s.yaml", pipeline.Name, node.ID)
+		hostPath := filepath.Join(configDir, configFile)
+		if err := os.WriteFile(hostPath, yamlBytes, 0644); err != nil {
+			return nil, fmt.Errorf("error writing config file: %w", err)
+		}
+
+		if err := validateWithRPK(hostPath); err != nil {
+			return nil, fmt.Errorf("%w: %w", model.ErrBenthosValidation, err)
+		}
+
+		cfgPaths[node.ID] = model.Paths{
+			ConfigDir:  configDir,
+			ConfigFile: configFile,
+		}
 	}
 
-	return cfgs, nil
+	return cfgPaths, nil
 }
 
 // generateBenthosConfig builds a Benthos YAML config for a single node.
@@ -47,13 +68,13 @@ func generateBenthosConfig(node configs.Node, pipeline configs.PipelineDefinitio
 		}
 	}
 
-	cfg := make(map[string]interface{})
+	cfg := make(map[string]any)
 
 	// Input: custom plugin if provided, otherwise default Kafka
 	if node.Input != nil {
 		cfg["input"] = node.Input
 	} else {
-		cfg["input"] = map[string]interface{}{"kafka": map[string]interface{}{
+		cfg["input"] = map[string]any{"kafka": map[string]any{
 			"addresses":      []string{"localhost:9092"},
 			"topics":         inputs,
 			"consumer_group": fmt.Sprintf("%s_%s_group", pipeline.Name, node.ID),
@@ -62,14 +83,14 @@ func generateBenthosConfig(node configs.Node, pipeline configs.PipelineDefinitio
 
 	// Processors: only for non-sink nodes
 	if node.Type != "sink" {
-		cfg["pipeline"] = map[string]interface{}{"processors": []interface{}{node.Config}}
+		cfg["pipeline"] = map[string]any{"processors": []any{node.Config}}
 	}
 
 	// Output: custom plugin for sink, otherwise default Kafka
 	if node.Type == "sink" && node.Output != nil {
 		cfg["output"] = node.Output
 	} else {
-		cfg["output"] = map[string]interface{}{"kafka": map[string]interface{}{
+		cfg["output"] = map[string]any{"kafka": map[string]any{
 			"addresses":      []string{"localhost:9092"},
 			"topics":         outputs,
 			"consumer_group": fmt.Sprintf("%s_%s_group", pipeline.Name, node.ID),
@@ -77,4 +98,13 @@ func generateBenthosConfig(node configs.Node, pipeline configs.PipelineDefinitio
 	}
 
 	return yaml.Marshal(cfg)
+}
+
+func validateWithRPK(configPath string) error {
+	cmd := exec.Command("rpk", "connect", "lint", configPath)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("rpk lint failed: %w\n%s", err, string(out))
+	}
+	return nil
 }
