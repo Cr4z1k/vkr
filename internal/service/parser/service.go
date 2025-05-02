@@ -90,14 +90,37 @@ func generateBenthosConfig(node configs.Node, pipeline configs.PipelineDefinitio
 	if node.Type == "sink" && node.Output != nil {
 		cfg["output"] = node.Output
 	} else {
-		cfg["output"] = map[string]any{"kafka": map[string]any{
-			"addresses":      []string{"localhost:9092"},
-			"topics":         outputs,
-			"consumer_group": fmt.Sprintf("%s_%s_group", pipeline.Name, node.ID),
-		}}
+		cfg["output"] = makeOutputMap(outputs)
 	}
 
 	return yaml.Marshal(cfg)
+}
+
+func makeOutputMap(outputTopics []string) map[string]interface{} {
+	if len(outputTopics) == 1 {
+		return map[string]interface{}{
+			"kafka": map[string]interface{}{
+				"addresses": []string{"localhost:9092"},
+				"topic":     outputTopics[0],
+			},
+		}
+	}
+	// multiple topics -> broker fan_out
+	var outs []interface{}
+	for _, t := range outputTopics {
+		outs = append(outs, map[string]interface{}{
+			"kafka": map[string]interface{}{
+				"addresses": []string{"localhost:9092"},
+				"topic":     t,
+			},
+		})
+	}
+	return map[string]interface{}{
+		"broker": map[string]interface{}{
+			"pattern": "fan_out",
+			"outputs": outs,
+		},
+	}
 }
 
 func validateWithRPK(configPath string) error {
