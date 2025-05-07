@@ -11,6 +11,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const (
+	configDir = "/config"
+)
+
+var kafkaAddres = os.Getenv("KAFKA_BROKERS")
+
 type Service struct {
 }
 
@@ -27,10 +33,6 @@ func (s *Service) ParseJsonToBenthosConfig(pipeline configs.PipelineDefinition) 
 			return nil, fmt.Errorf("error in generateBenthosConfig for nodeID - %s: %s", node.ID, err.Error())
 		}
 
-		configDir := filepath.Join(os.TempDir(), "ork_benthos_configs")
-		if err := os.MkdirAll(configDir, 0755); err != nil {
-			return nil, fmt.Errorf("cannot create config directory: %w", err)
-		}
 		configFile := fmt.Sprintf("%s_%s.yaml", pipeline.Name, node.ID)
 		hostPath := filepath.Join(configDir, configFile)
 		if err := os.WriteFile(hostPath, yamlBytes, 0644); err != nil {
@@ -75,7 +77,7 @@ func generateBenthosConfig(node configs.Node, pipeline configs.PipelineDefinitio
 		cfg["input"] = node.Input
 	} else {
 		cfg["input"] = map[string]any{"kafka": map[string]any{
-			"addresses":      []string{"localhost:9092"},
+			"addresses":      []string{kafkaAddres},
 			"topics":         inputs,
 			"consumer_group": fmt.Sprintf("%s_%s_group", pipeline.Name, node.ID),
 		}}
@@ -100,7 +102,7 @@ func makeOutputMap(outputTopics []string) map[string]interface{} {
 	if len(outputTopics) == 1 {
 		return map[string]interface{}{
 			"kafka": map[string]interface{}{
-				"addresses": []string{"localhost:9092"},
+				"addresses": []string{kafkaAddres},
 				"topic":     outputTopics[0],
 			},
 		}
@@ -110,7 +112,7 @@ func makeOutputMap(outputTopics []string) map[string]interface{} {
 	for _, t := range outputTopics {
 		outs = append(outs, map[string]interface{}{
 			"kafka": map[string]interface{}{
-				"addresses": []string{"localhost:9092"},
+				"addresses": []string{kafkaAddres},
 				"topic":     t,
 			},
 		})
