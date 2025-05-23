@@ -11,6 +11,10 @@ import (
 	"github.com/docker/docker/client"
 )
 
+const (
+	port = "8080"
+)
+
 func main() {
 	s := new(rest.Server)
 
@@ -31,7 +35,7 @@ func main() {
 	// main handler init
 	mainHanlder := handlers.New(cfgHandler)
 
-	if err := s.Run("8080", mainHanlder.InitRoutes()); err != nil {
+	if err := s.Run(port, mainHanlder.InitRoutes()); err != nil {
 		log.Fatal("Fatal start server: ", err.Error())
 	}
 }

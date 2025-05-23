@@ -28,10 +28,26 @@ func (s *Service) ParseJsonToBenthosConfig(pipeline configs.PipelineDefinition) 
 	cfgPaths := make(map[string]model.Paths)
 
 	for _, node := range pipeline.Nodes {
-		yamlBytes, err := generateBenthosConfig(node, pipeline)
+		// parse YAML strings to maps
+		inputMap, err := parseYamlStringToMap(node.Input)
+		if err != nil {
+			return nil, fmt.Errorf("invalid input yaml for node %s: %w", node.ID, err)
+		}
+		outputMap, err := parseYamlStringToMap(node.Output)
+		if err != nil {
+			return nil, fmt.Errorf("invalid output yaml for node %s: %w", node.ID, err)
+		}
+		configMap, err := parseYamlStringToMap(node.Config)
+		if err != nil {
+			return nil, fmt.Errorf("invalid config yaml for node %s: %w", node.ID, err)
+		}
+
+		yamlBytes, err := generateBenthosConfig(node, pipeline, inputMap, outputMap, configMap)
 		if err != nil {
 			return nil, fmt.Errorf("error in generateBenthosConfig for nodeID - %s: %s", node.ID, err.Error())
 		}
+
+		fmt.Printf("%s:\n %s\n", node.ID, string(yamlBytes))
 
 		configFile := fmt.Sprintf("%s_%s.yaml", pipeline.Name, node.ID)
 		hostPath := filepath.Join(configDir, configFile)
@@ -52,29 +68,46 @@ func (s *Service) ParseJsonToBenthosConfig(pipeline configs.PipelineDefinition) 
 	return cfgPaths, nil
 }
 
+// parseYamlStringToMap parses a YAML string into map[string]interface{}.
+// Returns nil if the string is empty.
+func parseYamlStringToMap(yamlStr string) (map[string]interface{}, error) {
+	if yamlStr == "" {
+		return nil, nil
+	}
+	var m map[string]interface{}
+	if err := yaml.Unmarshal([]byte(yamlStr), &m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 // generateBenthosConfig builds a Benthos YAML config for a single node.
 // Allows custom input (node.Input) and custom output (node.Output).
-func generateBenthosConfig(node configs.Node, pipeline configs.PipelineDefinition) ([]byte, error) {
-	// Determine upstream topics
+func generateBenthosConfig(
+	node configs.Node,
+	pipeline configs.PipelineDefinition,
+	inputMap, outputMap, configMap map[string]interface{},
+) ([]byte, error) {
+	// Determine upstream topics (input topics for this node)
 	var inputs []string
 	for _, edge := range pipeline.Edges {
 		if edge.To == node.ID {
-			inputs = append(inputs, fmt.Sprintf("pipeline.%s.%s", pipeline.Name, edge.From))
+			inputs = append(inputs, fmt.Sprintf("pipeline.%s.%s.%s", pipeline.Name, edge.From, edge.To))
 		}
 	}
-	// Determine downstream topics
+	// Determine downstream topics (output topics for this node)
 	var outputs []string
 	for _, edge := range pipeline.Edges {
 		if edge.From == node.ID {
-			outputs = append(outputs, fmt.Sprintf("pipeline.%s.%s", pipeline.Name, edge.To))
+			outputs = append(outputs, fmt.Sprintf("pipeline.%s.%s.%s", pipeline.Name, edge.From, edge.To))
 		}
 	}
 
 	cfg := make(map[string]any)
 
 	// Input: custom plugin if provided, otherwise default Kafka
-	if node.Input != nil {
-		cfg["input"] = node.Input
+	if inputMap != nil {
+		cfg["input"] = inputMap
 	} else {
 		cfg["input"] = map[string]any{"kafka": map[string]any{
 			"addresses":      []string{kafkaAddres},
@@ -84,13 +117,13 @@ func generateBenthosConfig(node configs.Node, pipeline configs.PipelineDefinitio
 	}
 
 	// Processors: only for non-sink nodes
-	if node.Type != "sink" {
-		cfg["pipeline"] = map[string]any{"processors": []any{node.Config}}
+	if node.Type != "sink" && configMap != nil {
+		cfg["pipeline"] = map[string]any{"processors": []any{configMap}}
 	}
 
 	// Output: custom plugin for sink, otherwise default Kafka
-	if node.Type == "sink" && node.Output != nil {
-		cfg["output"] = node.Output
+	if node.Type == "sink" && outputMap != nil {
+		cfg["output"] = outputMap
 	} else {
 		cfg["output"] = makeOutputMap(outputs)
 	}
