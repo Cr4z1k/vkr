@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"os"
 
 	"github.com/Cr4z1k/vkr/internal/docker_cli"
 	cfgService "github.com/Cr4z1k/vkr/internal/service/parser"
@@ -11,8 +12,8 @@ import (
 	"github.com/docker/docker/client"
 )
 
-const (
-	port = "8080"
+var (
+	port = os.Getenv("ORCHESTRATOR_PORT")
 )
 
 func main() {

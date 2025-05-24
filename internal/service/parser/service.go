@@ -15,7 +15,7 @@ const (
 	configDir = "/config"
 )
 
-var kafkaAddres = os.Getenv("KAFKA_BROKERS")
+var kafkaAddres = os.Getenv("KAFKA_BROKER")
 
 type Service struct {
 }
