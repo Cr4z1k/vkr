@@ -5,7 +5,7 @@
 ### 1. Клонируйте репозиторий
 
 ```powershell
-git clone <адрес-репозитория>
+git clone https://github.com/Cr4z1k/vkr_back
 cd vkr_back
 ```
 
