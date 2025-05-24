@@ -116,8 +116,8 @@ func generateBenthosConfig(
 		}}
 	}
 
-	// Processors: only for non-sink nodes
-	if node.Type != "sink" && configMap != nil {
+	// Processors
+	if configMap != nil {
 		cfg["pipeline"] = map[string]any{"processors": []any{configMap}}
 	}
 
