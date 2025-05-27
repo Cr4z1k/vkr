@@ -8,6 +8,7 @@ import (
 	cfgService "github.com/Cr4z1k/vkr/internal/service/parser"
 	"github.com/Cr4z1k/vkr/internal/transport/rest"
 	"github.com/Cr4z1k/vkr/internal/transport/rest/handlers"
+	"github.com/Cr4z1k/vkr/internal/transport/rest/handlers/clean_up"
 	"github.com/Cr4z1k/vkr/internal/transport/rest/handlers/configs"
 	"github.com/docker/docker/client"
 )
@@ -32,9 +33,10 @@ func main() {
 
 	// init handlers
 	cfgHandler := configs.New(parserService, docker)
+	cleanupHandler := clean_up.New(docker)
 
 	// main handler init
-	mainHanlder := handlers.New(cfgHandler)
+	mainHanlder := handlers.New(cfgHandler, cleanupHandler)
 
 	if err := s.Run(port, mainHanlder.InitRoutes()); err != nil {
 		log.Fatal("Fatal start server: ", err.Error())

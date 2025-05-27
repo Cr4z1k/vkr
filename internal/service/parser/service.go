@@ -5,14 +5,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
+	"github.com/AlekSi/pointer"
 	"github.com/Cr4z1k/vkr/internal/model"
-	"github.com/Cr4z1k/vkr/internal/transport/rest/handlers/configs"
 	"gopkg.in/yaml.v3"
-)
-
-const (
-	configDir = "/config"
 )
 
 var kafkaAddres = os.Getenv("KAFKA_BROKER")
@@ -24,30 +21,44 @@ func New() *Service {
 	return &Service{}
 }
 
-func (s *Service) ParseJsonToBenthosConfig(pipeline configs.PipelineDefinition) (map[string]model.Paths, error) {
+func (s *Service) ParseJsonToBenthosConfig(pipeline model.PipelineDefinition) (map[string]model.Paths, error) {
 	cfgPaths := make(map[string]model.Paths)
 
 	for _, node := range pipeline.Nodes {
+		if node.Type == "join" && (node.Meta == nil || node.Meta.CacheKey == "") {
+			return nil, fmt.Errorf("join node %s must have a non-empty cache key in metadata", node.ID)
+		} else if node.Type == "join" && node.Meta != nil {
+			if node.Meta.DefaultTTL == nil {
+				node.Meta.DefaultTTL = pointer.ToString("5m")
+			}
+		}
+
 		// parse YAML strings to maps
 		inputMap, err := parseYamlStringToMap(node.Input)
 		if err != nil {
 			return nil, fmt.Errorf("invalid input yaml for node %s: %w", node.ID, err)
 		}
+
 		outputMap, err := parseYamlStringToMap(node.Output)
 		if err != nil {
 			return nil, fmt.Errorf("invalid output yaml for node %s: %w", node.ID, err)
 		}
-		configMap, err := parseYamlStringToMap(node.Config)
-		if err != nil {
-			return nil, fmt.Errorf("invalid config yaml for node %s: %w", node.ID, err)
-		}
 
-		yamlBytes, err := generateBenthosConfig(node, pipeline, inputMap, outputMap, configMap)
+		yamlBytes, err := generateBenthosConfig(node, pipeline, inputMap, outputMap, node.Meta)
 		if err != nil {
 			return nil, fmt.Errorf("error in generateBenthosConfig for nodeID - %s: %s", node.ID, err.Error())
 		}
 
-		fmt.Printf("%s:\n %s\n", node.ID, string(yamlBytes))
+		if node.Type != "join" && node.Config != "" {
+			yamlBytes = append(yamlBytes, []byte(defaultConfigStartingString)...)
+			yamlBytes = append(yamlBytes, []byte(indentYaml(node.Config, 4))...)
+		} else if node.Type == "join" {
+			yamlBytes = append(yamlBytes, []byte(fmt.Sprintf(defaultJoinConfigTemplate, node.Meta.CacheKey))...)
+
+			if node.Meta != nil && node.Meta.FilterCondition != nil && *node.Meta.FilterCondition != "" {
+				yamlBytes = append(yamlBytes, []byte(fmt.Sprintf(joinFilterCondition, *node.Meta.FilterCondition))...)
+			}
+		}
 
 		configFile := fmt.Sprintf("%s_%s.yaml", pipeline.Name, node.ID)
 		hostPath := filepath.Join(configDir, configFile)
@@ -68,25 +79,28 @@ func (s *Service) ParseJsonToBenthosConfig(pipeline configs.PipelineDefinition) 
 	return cfgPaths, nil
 }
 
-// parseYamlStringToMap parses a YAML string into map[string]interface{}.
+// parseYamlStringToMap parses a YAML string into map[string]any.
 // Returns nil if the string is empty.
-func parseYamlStringToMap(yamlStr string) (map[string]interface{}, error) {
+func parseYamlStringToMap(yamlStr string) (map[string]any, error) {
 	if yamlStr == "" {
 		return nil, nil
 	}
-	var m map[string]interface{}
+
+	var m map[string]any
 	if err := yaml.Unmarshal([]byte(yamlStr), &m); err != nil {
 		return nil, err
 	}
+
 	return m, nil
 }
 
 // generateBenthosConfig builds a Benthos YAML config for a single node.
 // Allows custom input (node.Input) and custom output (node.Output).
 func generateBenthosConfig(
-	node configs.Node,
-	pipeline configs.PipelineDefinition,
-	inputMap, outputMap, configMap map[string]interface{},
+	node model.Node,
+	pipeline model.PipelineDefinition,
+	inputMap, outputMap map[string]any,
+	meta *model.MetaData,
 ) ([]byte, error) {
 	// Determine upstream topics (input topics for this node)
 	var inputs []string
@@ -95,6 +109,7 @@ func generateBenthosConfig(
 			inputs = append(inputs, fmt.Sprintf("pipeline.%s.%s.%s", pipeline.Name, edge.From, edge.To))
 		}
 	}
+
 	// Determine downstream topics (output topics for this node)
 	var outputs []string
 	for _, edge := range pipeline.Edges {
@@ -105,7 +120,12 @@ func generateBenthosConfig(
 
 	cfg := make(map[string]any)
 
-	// Input: custom plugin if provided, otherwise default Kafka
+	cfg["logger"] = map[string]any{
+		"level":  "TRACE",  // всегда TRACE, чтобы видеть все логи
+		"format": "logfmt", // формат логов
+	}
+
+	// Input если inputMap задан — используем его, иначе дефолтный Kafka
 	if inputMap != nil {
 		cfg["input"] = inputMap
 	} else {
@@ -116,13 +136,20 @@ func generateBenthosConfig(
 		}}
 	}
 
-	// Processors: only for non-sink nodes
-	if node.Type != "sink" && configMap != nil {
-		cfg["pipeline"] = map[string]any{"processors": []any{configMap}}
+	// Cache resources for join nodes
+	if node.Type == "join" {
+		cfg["cache_resources"] = []any{
+			map[string]any{
+				"label": "join_cache",
+				"memory": map[string]any{
+					"default_ttl": meta.DefaultTTL,
+				},
+			},
+		}
 	}
 
-	// Output: custom plugin for sink, otherwise default Kafka
-	if node.Type == "sink" && outputMap != nil {
+	// Output: если outputMap задан — используем его, иначе дефолтный Kafka
+	if outputMap != nil {
 		cfg["output"] = outputMap
 	} else {
 		cfg["output"] = makeOutputMap(outputs)
@@ -131,27 +158,31 @@ func generateBenthosConfig(
 	return yaml.Marshal(cfg)
 }
 
-func makeOutputMap(outputTopics []string) map[string]interface{} {
+func makeOutputMap(outputTopics []string) map[string]any {
 	if len(outputTopics) == 1 {
-		return map[string]interface{}{
-			"kafka": map[string]interface{}{
+		return map[string]any{
+			"kafka": map[string]any{
 				"addresses": []string{kafkaAddres},
 				"topic":     outputTopics[0],
 			},
 		}
 	}
+
 	// multiple topics -> broker fan_out
-	var outs []interface{}
+	var outs []any
 	for _, t := range outputTopics {
-		outs = append(outs, map[string]interface{}{
-			"kafka": map[string]interface{}{
+		out := map[string]any{
+			"kafka": map[string]any{
 				"addresses": []string{kafkaAddres},
 				"topic":     t,
 			},
-		})
+		}
+
+		outs = append(outs, out)
 	}
-	return map[string]interface{}{
-		"broker": map[string]interface{}{
+
+	return map[string]any{
+		"broker": map[string]any{
 			"pattern": "fan_out",
 			"outputs": outs,
 		},
@@ -160,9 +191,22 @@ func makeOutputMap(outputTopics []string) map[string]interface{} {
 
 func validateWithRPK(configPath string) error {
 	cmd := exec.Command("rpk", "connect", "lint", configPath)
+
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("rpk lint failed: %w\n%s", err, string(out))
 	}
+
 	return nil
+}
+
+func indentYaml(yamlStr string, n int) string {
+	pad := strings.Repeat(" ", n)
+	lines := strings.Split(yamlStr, "\n")
+	for i, l := range lines {
+		if strings.TrimSpace(l) != "" {
+			lines[i] = pad + l
+		}
+	}
+	return strings.Join(lines, "\n") + "\n"
 }

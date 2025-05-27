@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/Cr4z1k/vkr/internal/model"
-	"github.com/Cr4z1k/vkr/internal/transport/rest/handlers/configs"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
@@ -18,6 +17,8 @@ import (
 const (
 	// dockerImage is the Redpanda Connect (Benthos) image
 	dockerImage = "redpandadata/connect:latest"
+	// Docker volume for config files
+	dockerVolumeName = "vkr_configs"
 )
 
 type DockerCli struct {
@@ -57,10 +58,12 @@ func (d *DockerCli) LaunchBenthosContainer(
 	if err != nil {
 		return fmt.Errorf("error listing containers: %w", err)
 	}
+
 	for _, ctr := range existing {
 		_ = d.cli.ContainerStop(ctx, ctr.ID, container.StopOptions{})
 		_ = d.cli.ContainerRemove(ctx, ctr.ID, container.RemoveOptions{Force: true})
 	}
+
 	// Create container with mounted config and network
 	resp, err := d.cli.ContainerCreate(
 		ctx,
@@ -69,7 +72,7 @@ func (d *DockerCli) LaunchBenthosContainer(
 			Cmd:   []string{"run", "/config/" + cfgPaths.ConfigFile},
 		},
 		&container.HostConfig{
-			Binds:       []string{"vkr_configs:/config"},
+			Binds:       []string{dockerVolumeName + ":/config"},
 			NetworkMode: container.NetworkMode(networkMode),
 		},
 		nil, nil,
@@ -90,7 +93,7 @@ func (d *DockerCli) LaunchBenthosContainer(
 // CleanupRemovedContainers stops/removes containers not in desired pipelines
 func (d *DockerCli) CleanupRemovedContainers(
 	ctx context.Context,
-	pipelines []configs.PipelineDefinition,
+	pipelines []model.PipelineDefinition,
 ) error {
 	containers, err := d.cli.ContainerList(ctx, container.ListOptions{
 		All:     true,
@@ -99,12 +102,14 @@ func (d *DockerCli) CleanupRemovedContainers(
 	if err != nil {
 		return fmt.Errorf("error listing containers: %w", err)
 	}
+
 	desired := make(map[string]struct{})
 	for _, p := range pipelines {
 		for _, n := range p.Nodes {
 			desired[fmt.Sprintf("connect_%s_%s", p.Name, n.ID)] = struct{}{}
 		}
 	}
+
 	for _, ctr := range containers {
 		for _, raw := range ctr.Names {
 			name := strings.TrimPrefix(raw, "/")
@@ -114,6 +119,7 @@ func (d *DockerCli) CleanupRemovedContainers(
 			}
 		}
 	}
+
 	return nil
 }
 
@@ -126,12 +132,33 @@ func (d *DockerCli) ensureImage(
 	if _, err := d.cli.ImageInspect(ctx, imageName); err == nil {
 		return nil
 	}
+
 	// Pull the image
 	rc, err := d.cli.ImagePull(ctx, imageName, image.PullOptions{})
 	if err != nil {
 		return fmt.Errorf("error pulling image %s: %w", imageName, err)
 	}
 	defer rc.Close()
+
 	_, _ = io.Copy(io.Discard, rc)
+	return nil
+}
+
+// CleanupContainers удаляет все контейнеры, запущенные с помощью LaunchBenthosContainer (имя начинается с connect_)
+// и очищает volume dockerVolumeName
+func (d *DockerCli) CleanupPipelinesContainers(ctx context.Context) error {
+	containers, err := d.cli.ContainerList(ctx, container.ListOptions{
+		All:     true,
+		Filters: filters.NewArgs(filters.Arg("name", "connect_")),
+	})
+	if err != nil {
+		return fmt.Errorf("error listing containers: %w", err)
+	}
+
+	for _, ctr := range containers {
+		_ = d.cli.ContainerStop(ctx, ctr.ID, container.StopOptions{})
+		_ = d.cli.ContainerRemove(ctx, ctr.ID, container.RemoveOptions{Force: true})
+	}
+
 	return nil
 }

@@ -3,7 +3,8 @@ module github.com/Cr4z1k/vkr
 go 1.24.2
 
 require (
-	github.com/gin-gonic/gin v1.10.0
+	github.com/AlekSi/pointer v1.2.0
+	github.com/gin-gonic/gin v1.10.1
 	gopkg.in/yaml.v3 v3.0.1
 )
 

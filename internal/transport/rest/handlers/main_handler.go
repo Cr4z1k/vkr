@@ -1,17 +1,20 @@
 package handlers
 
 import (
+	"github.com/Cr4z1k/vkr/internal/transport/rest/handlers/clean_up"
 	"github.com/Cr4z1k/vkr/internal/transport/rest/handlers/configs"
 	"github.com/gin-gonic/gin"
 )
 
 type MainHandler struct {
 	configsHandler *configs.Handler
+	cleanupHandler *clean_up.Handler
 }
 
-func New(configsHandler *configs.Handler) *MainHandler {
+func New(configsHandler *configs.Handler, cleanupHandler *clean_up.Handler) *MainHandler {
 	return &MainHandler{
 		configsHandler: configsHandler,
+		cleanupHandler: cleanupHandler,
 	}
 }
 
@@ -31,6 +34,7 @@ func (h *MainHandler) InitRoutes() *gin.Engine {
 	})
 
 	r.POST("/setConfigs", h.configsHandler.SetConfigs)
+	r.DELETE("/cleanUp", h.cleanupHandler.CleanUp)
 
 	return r
 }
